@@ -45,6 +45,7 @@ So, RES can be either milenage res, or received response, so hash of milenage re
 
 typedef struct {
   char *imsiStr;
+  uint8_t inc_imsi;
   char *imeisvStr;
   char *keyStr;
   char *opcStr;

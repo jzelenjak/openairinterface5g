@@ -361,6 +361,8 @@ typedef struct gNB_RRC_INST_s {
   eth_params_t                                        eth_params_s;
   uid_allocator_t                                     uid_allocator;
   RB_HEAD(rrc_nr_ue_tree_s, rrc_gNB_ue_context_s) rrc_ue_head; // ue_context tree key search by rnti
+  uint32_t num_active_rrc_ue_contexts;
+  uint32_t num_cumulative_rrc_ue_contexts;
   /// NR cell id
   uint64_t nr_cellid;
 

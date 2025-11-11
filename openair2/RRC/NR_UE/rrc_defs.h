@@ -225,6 +225,8 @@ typedef struct NR_UE_RRC_INST_s {
   rnti_t rnti;
   uint32_t phyCellID;
   long arfcn_ssb;
+  uint32_t established_rrc_connections;
+  uint32_t num_restarts;
 
   OAI_NR_UECapability_t UECap;
   NR_UE_Timers_Constants_t timers_and_constants;

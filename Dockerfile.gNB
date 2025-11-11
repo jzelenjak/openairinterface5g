@@ -1,0 +1,90 @@
+# Dockerfile that creates the image for OAI gNB.
+# NB! Make sure to first build OAI (and dependencies) using Dockerfile.build.
+# For the original Dockerfiles, see the official OpenAirInterface (OAI) repository at
+#   https://gitlab.eurecom.fr/oai/openairinterface5g/
+
+
+FROM oai-builder AS gnb-build
+
+# Start from scratch for the target OAI executable (gNB)
+FROM ubuntu:noble AS oai-gnb
+ARG BUILD_OPTION
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Europe/Paris
+
+# Install runtime packages
+RUN apt-get update && \
+    apt-get upgrade --yes && \
+    apt-get install --yes software-properties-common procps libsctp1 libboost-chrono1.83.0 libboost-date-time1.83.0 libboost-filesystem1.83.0 \
+        libboost-regex1.83.0 libboost-serialization1.83.0 libboost-thread1.83.0 libboost-system1.83.0 libboost-program-options1.83.0 \
+        tzdata liblapacke libblas3 libconfig9 openssl net-tools iperf iperf3 iproute2 iputils-ping gdb python3 python3-six python3-requests \
+        libusb-1.0-0 libyaml-cpp-dev vim less && \
+# if the --sanitize option was used to build, additional packages are required
+    /bin/bash -c 'if [[ "$BUILD_OPTION" = "--sanitize" ]]; then DEBIAN_FRONTEND=noninteractive apt-get install --yes \
+        libasan8 \
+        libubsan1; fi' && \
+    apt-get clean -y && \
+    rm -rf /var/lib/apt/lists/*;
+
+# Copy the target executable (gNB)
+# If you want to use the entrypoint script, you can copy it as follows:
+#   COPY ./docker/scripts/gnb_entrypoint.sh ./entrypoint.sh
+# Make sure to have gnb.conf file in /opt/oai-gnb/etc directory (otherwise, the entrypoint script will fail)
+WORKDIR /opt/oai-gnb/bin
+COPY --from=gnb-build /oai-ran/cmake_targets/ran_build/build/nr-softmodem ./
+
+# Copy configuration files for gNB
+# For all gNB configuration files, use: ./targets/PROJECTS/GENERIC-NR-5GC/CONF/gnb.sa*.conf
+# For all gNB rfsim configuration files, use: ./targets/PROJECTS/GENERIC-NR-5GC/CONF/gnb.sa*rfsim*.conf
+# For all gNB-DU configuration files, use: ./targets/PROJECTS/GENERIC-NR-5GC/CONF/gnb-du.sa*.conf
+# For all gNB-DU rfsim configuration files, use: ./targets/PROJECTS/GENERIC-NR-5GC/CONF/gnb-du.sa*rfsim*.conf
+WORKDIR /opt/oai-gnb/etc
+COPY ./targets/PROJECTS/GENERIC-NR-5GC/CONF/gnb.sa.band78.fr1.106PRB.usrpb210.conf \
+     ./targets/PROJECTS/GENERIC-NR-5GC/CONF/gnb.sa.band78.fr1.106PRB.pci0.rfsim.conf \
+     ./targets/PROJECTS/GENERIC-NR-5GC/CONF/gnb-du.sa.band78.106prb.rfsim.pci0.conf \
+     ./targets/PROJECTS/GENERIC-NR-5GC/CONF/gnb-cu.sa.f1.conf ./
+
+# Copy dynamic libraries
+COPY --from=gnb-build \
+    /oai-ran/cmake_targets/ran_build/build/liboai_eth_transpro.so \
+    /oai-ran/cmake_targets/ran_build/build/librfsimulator.so \
+    /oai-ran/cmake_targets/ran_build/build/liboai_usrpdevif.so \
+    /oai-ran/cmake_targets/ran_build/build/libcoding.so \
+    /oai-ran/cmake_targets/ran_build/build/libparams_libconfig.so \
+    /oai-ran/cmake_targets/ran_build/build/libdfts.so \
+    /oai-ran/cmake_targets/ran_build/build/libldpc*.so \
+    /oai-ran/cmake_targets/ran_build/build/libparams_yaml.so \
+    /oai-ran/cmake_targets/ran_build/build/libvrtsim.so \
+    /usr/local/lib/
+
+# Copy UHD files
+COPY --from=gnb-build /usr/local/bin/uhd_find_devices /usr/local/bin
+COPY --from=gnb-build /usr/local/lib/libuhd.so.4.8.0 /usr/local/lib
+COPY --from=gnb-build /usr/local/lib/uhd/utils/uhd_images_downloader.py /opt/oai-gnb/bin
+
+RUN /bin/bash -c "ln -s /usr/local/lib/liboai_usrpdevif.so /usr/local/lib/liboai_device.so" && \
+    ldconfig && \
+    echo "---- ldd on nr-softmodem ----" && \
+    ldd /opt/oai-gnb/bin/nr-softmodem && \
+    echo "---- ldd on shared libraries ----" && \
+    ldd /usr/local/lib/liboai_eth_transpro.so \
+        /usr/local/lib/librfsimulator.so \
+        /usr/local/lib/liboai_usrpdevif.so \
+        /usr/local/lib/libcoding.so \
+        /usr/local/lib/libparams_libconfig.so \
+        /usr/local/lib/libdfts.so \
+        /usr/local/lib/libldpc*.so \
+        /usr/local/lib/libuhd.so.4.8.0
+
+WORKDIR /opt/oai-gnb
+#EXPOSE 2152/udp  # S1U, GTP/UDP
+#EXPOSE 22100/tcp # ?
+#EXPOSE 36412/udp # S1C, SCTP/UDP
+#EXPOSE 36422/udp # X2C, SCTP/UDP
+#EXPOSE 50000/udp # IF5 / ORI (control)
+#EXPOSE 50001/udp # IF5 / ECPRI (data)
+
+# If you want to use the entrypoint script (see the comment above), use:
+#   ENTRYPOINT ["/opt/oai-gnb/bin/entrypoint.sh"]
+ENTRYPOINT ["/opt/oai-gnb/bin/nr-softmodem"]
+CMD ["--help"]

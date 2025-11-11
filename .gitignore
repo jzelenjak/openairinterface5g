@@ -13,6 +13,7 @@ lte_build_oai/
 .cproject
 .project
 .settings
+.idea/
 
 # Tags for vim/global
 GPATH

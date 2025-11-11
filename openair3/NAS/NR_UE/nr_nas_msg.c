@@ -418,6 +418,14 @@ static security_state_t nas_security_rx_process(nr_ue_nas_t *nas, byte_array_t b
   return NAS_SECURITY_INTEGRITY_PASSED;
 }
 
+// A helper function to perform integer exponentiation
+uint64_t uint_pow(uint64_t base, uint8_t exp) {
+  uint64_t ret = 1;
+  while (exp-- > 0)
+    ret *= base;
+  return ret;
+}
+
 static int fill_suci(FGSMobileIdentity *mi, const uicc_t *uicc)
 {
   mi->suci.typeofidentity = FGS_MOBILE_IDENTITY_SUCI;
@@ -427,6 +435,22 @@ static int fill_suci(FGSMobileIdentity *mi, const uicc_t *uicc)
   mi->suci.mccdigit1 = uicc->imsiStr[0] - '0';
   mi->suci.mccdigit2 = uicc->imsiStr[1] - '0';
   mi->suci.mccdigit3 = uicc->imsiStr[2] - '0';
+  // (If needed) Increment the IMSI (MSIN) for this Registration Request
+  if (uicc->inc_imsi) {
+    char *msin = uicc->imsiStr + 3 + uicc->nmc_size;
+    size_t msin_len = strlen(uicc->imsiStr) - (3 + uicc->nmc_size);
+
+    // Convert MSIN to unsigned integer (base 10) and increment
+    // (keeping it 10 digits if MNC is 2 digits, and 9 digits if MNC is 3 digits)
+    // (the total length of IMSI is not more than 15 digits, per 3GPP TS 23.003 clause 2.2)
+    // Note that after wrap-around MSIN can also be reset to another value
+    uint64_t msin_dec = strtoull(msin, NULL, 10);
+    uint64_t max_msin_value = uint_pow(10, msin_len) - 1;
+    msin_dec = (msin_dec != max_msin_value) ? msin_dec + 1 : 1;
+
+    snprintf(uicc->imsiStr + 3 + uicc->nmc_size, msin_len + 1, "%.*" PRIu64, (int)msin_len, msin_dec);
+    LOG_I(NAS, "\033[1;96m[JEGOR_DEBUG] MSIN in the Registration Request is %.*s\033[0m\n", (int)msin_len, msin);
+  }
   memcpy(mi->suci.schemeoutput, uicc->imsiStr + 3 + uicc->nmc_size, strlen(uicc->imsiStr) - (3 + uicc->nmc_size));
   LOG_D(NAS,
         "SUCI in registration request: SUPI type: %d Type of Identity: %u MCC: %u%u%u, MNC: %u%u%u, \

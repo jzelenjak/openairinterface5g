@@ -2439,6 +2439,9 @@ static void rrc_CU_process_ue_context_release_complete(MessageDef *msg_p)
      * operation (i.e, handover) */
     rrc_gNB_send_NGAP_UE_CONTEXT_RELEASE_COMPLETE(0, UE->rrc_ue_id, &UE->pduSessions);
     rrc_remove_ue(RC.nrrrc[0], ue_context_p);
+  } else {
+    LOG_W(NR_RRC, "[JEGOR_DEBUG] RRC context was supposed to be released but it was not released (CU UE ID %u, DU UE ID %u)\n",
+      complete->gNB_CU_ue_id, complete->gNB_DU_ue_id);
   }
 }
 

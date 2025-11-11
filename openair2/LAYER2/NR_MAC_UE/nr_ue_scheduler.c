@@ -1357,6 +1357,7 @@ void nr_ue_ul_scheduler(NR_UE_MAC_INST_t *mac, nr_uplink_indication_t *ul_info)
   RA_config_t *ra = &mac->ra;
 
   if (mac->state == UE_PERFORMING_RA && ra->ra_state == nrRA_UE_IDLE) {
+    LOG_I(NR_MAC, "\033[1;94m[JEGOR_DEBUG] Calling init_RA from nr_ue_scheduler.c:nr_ue_ul_scheduler\033[0m\n");
     init_RA(mac, frame_tx);
     // perform the Random Access Resource selection procedure (see clause 5.1.2 and .2a)
     ra_resource_selection(mac);
@@ -1394,6 +1395,7 @@ void nr_ue_ul_scheduler(NR_UE_MAC_INST_t *mac, nr_uplink_indication_t *ul_info)
             ra->ra_state);
       pdu->tx_request_body.fapiTxPdu = NULL;
       if ((ra->ra_state == nrRA_WAIT_RAR || ra->ra_state == nrRA_WAIT_MSGB) && !ra->cfra) {
+        LOG_I(NR_MAC, "\033[1;94m[JEGOR_DEBUG] Calling nr_get_Msg3_MsgA_PUSCH_payload from nr_ue_scheduler.c:nr_ue_ul_scheduler\033[0m\n");
         nr_get_Msg3_MsgA_PUSCH_payload(mac, ulsch_input_buffer, TBS_bytes);
         for (int k = 0; k < TBS_bytes; k++) {
           LOG_D(NR_MAC, "(%i): 0x%x\n", k, ulsch_input_buffer[k]);

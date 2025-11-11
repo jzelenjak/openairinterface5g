@@ -1,0 +1,34 @@
+# Dockerfile that builds the OAI executables (NR UE and gNB) and keeps all files in the image.
+# NB! Make sure to first install and build the dependencies using Dockerfile.deps.
+# After building this image, you can use Dockerfile.nrUE and Dockerfile.gNB to create specific target images.
+# For the original Dockerfiles, see the official OpenAirInterface (OAI) repository at
+#   https://gitlab.eurecom.fr/oai/openairinterface5g/
+
+
+FROM oai-deps AS oai-builder
+ARG BUILD_OPTION
+
+# Copy the OAI source code
+WORKDIR /oai-ran
+COPY . .
+
+# Build the OAI executables (NR UE and gNB)
+RUN \
+   # Mount CCache cache directory
+   --mount=type=cache,target=/root/.cache/ccache/ \
+   # Mount CPM package cache
+   --mount=type=cache,target=/root/.cache/cpm/ \
+    /bin/sh oaienv && \
+    cd cmake_targets && \
+    mkdir -p log && \
+    ./build_oai -c --ninja \
+      --nrUE --gNB \
+      -w USRP -t Ethernet \
+      --noavx512 \
+      --build-tool-opt -k10 \
+      --cmake-opt -DCMAKE_C_FLAGS="-Werror" --cmake-opt -DCMAKE_CXX_FLAGS="-Werror" "$BUILD_OPTION" && \
+    # Mainly to see if the sanitize option was perfectly executed
+    echo "---- ldd on executables ----" && \
+    ldd ran_build/build/*softmodem* ran_build/build/nr-cuup && \
+    echo "---- ldd on shared libraries ----" && \
+    ldd ran_build/build/*.so

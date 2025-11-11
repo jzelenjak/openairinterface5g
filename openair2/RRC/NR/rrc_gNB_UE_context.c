@@ -42,6 +42,22 @@
 #include "tree.h"
 #include "rrc_gNB_radio_bearers.h"
 
+// YYYY-MM-DD HH:MM:SS
+#define LOG_TIME_FORMAT "%04d-%02d-%02d %02d:%02d:%02d"
+// Number of characters in the timestamp (after formating)
+#define LOG_TIME_FORMAT_SIZE 19
+// Function pointer to gmtime_r or localtime_r functions
+typedef struct tm *(*time_func_r)(const time_t *restrict timep, struct tm *restrict result);
+// Helper function to get the current time (UTC or local time)
+void current_time_gnb(char *time_buffer, const uint8_t buffer_size, const time_func_r tf)
+{
+  const time_t raw_time = time(NULL);
+  struct tm tm;
+  tf(&raw_time, &tm);
+  snprintf(time_buffer, buffer_size, LOG_TIME_FORMAT,
+    tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+}
+
 static void rrc_gNB_ue_context_update_time(rrc_gNB_ue_context_t *ctxt)
 {
   ctxt->ue_context.last_seen = time(NULL);
@@ -71,6 +87,7 @@ rrc_gNB_ue_context_t *rrc_gNB_allocate_new_ue_context(gNB_RRC_INST *rrc_instance
 //------------------------------------------------------------------------------
 {
   rrc_gNB_ue_context_t *new_p = calloc(1, sizeof(*new_p));
+  LOG_I(NR_RRC, "\033[1;96m[JEGOR_DEBUG] Allocate %zu bytes for the RRC context for a new UE\033[0m\n", sizeof(*new_p));
 
   if (new_p == NULL) {
     LOG_E(NR_RRC, "Cannot allocate new ue context\n");
@@ -159,6 +176,25 @@ void rrc_gNB_remove_ue_context(gNB_RRC_INST *rrc_instance_pP, rrc_gNB_ue_context
   RB_REMOVE(rrc_nr_ue_tree_s, &rrc_instance_pP->rrc_ue_head, ue_context_pP);
   uid_linear_allocator_free(&rrc_instance_pP->uid_allocator, ue_context_pP->ue_context.rrc_ue_id - 1);
   cu_remove_f1_ue_data(ue_context_pP->ue_context.rrc_ue_id);
+
+  rrc_instance_pP->num_active_rrc_ue_contexts--;
+
+  char time_str[LOG_TIME_FORMAT_SIZE + 1];
+  current_time_gnb(time_str, sizeof(time_str), gmtime_r);
+  LOG_I(NR_RRC, "\033[1;95m[JEGOR] [%s] Remove RRC UE Context for UE with RNTI %04x. Active RRC contexts: %" PRIu32 \
+    ". Cumulative RRC contexts: %" PRIu32 "\033[0m\n", time_str, ue_context_pP->ue_context.rnti,
+    rrc_instance_pP->num_active_rrc_ue_contexts, rrc_instance_pP->num_cumulative_rrc_ue_contexts);
+
+  // Note: The part below recomputes the number of (active) RRC contexts directly from the Red-Black tree
+  // It is meant to check that num_active_rrc_ue_contexts is consistent with the count in the tree
+  // For performance reasons, this check has been disabled, but you can comment this out if needed
+  // uint32_t num_contexts_in_tree = 0;
+  // rrc_gNB_ue_context_t *ue_context_p_dummy;
+  // RB_FOREACH (ue_context_p_dummy, rrc_nr_ue_tree_s, &(rrc_instance_pP->rrc_ue_head)) { num_contexts_in_tree++; }
+  // LOG_I(NR_RRC, "\033[1;96m[JEGOR_DEBUG] Active RRC UE contexts in the Red Black tree: %" PRIu16 "\033[0m\n", num_contexts_in_tree);
+  // AssertFatal(rrc_instance_pP->num_active_rrc_ue_contexts == num_contexts_in_tree,
+  //  "Error: num_active_rrc_ue_contexts (%" PRIu32 ") does not match the count in the RB tree (%" PRIu32 ")\n",
+  //   rrc_instance_pP->num_active_rrc_ue_contexts, num_contexts_in_tree);
   rrc_gNB_free_mem_ue_context(ue_context_pP);
 }
 
@@ -233,5 +269,25 @@ rrc_gNB_ue_context_t *rrc_gNB_create_ue_context(sctp_assoc_t assoc_id,
                du_ue_id,
                ue->rnti,
                ue->random_ue_identity);
+
+  rrc_instance_pP->num_active_rrc_ue_contexts++;
+  rrc_instance_pP->num_cumulative_rrc_ue_contexts++;
+
+  char time_str[LOG_TIME_FORMAT_SIZE + 1];
+  current_time_gnb(time_str, sizeof(time_str), gmtime_r);
+  LOG_I(NR_RRC, "\033[1;95m[JEGOR] [%s] Create RRC UE Context for UE with RNTI %04x. Active RRC contexts: %" PRIu32 \
+    ". Cumulative RRC contexts: %" PRIu32 "\033[0m\n", time_str, ue_context_p->ue_context.rnti,
+    rrc_instance_pP->num_active_rrc_ue_contexts, rrc_instance_pP->num_cumulative_rrc_ue_contexts);
+
+  // Note: The part below recomputes the number of (active) RRC contexts directly from the Red-Black tree
+  // It is meant to check that num_active_rrc_ue_contexts is consistent with the count in the tree
+  // For performance reasons, this check has been disabled, but you can comment this out if needed
+  // uint32_t num_contexts_in_tree = 0;
+  // rrc_gNB_ue_context_t *ue_context_p_dummy;
+  // RB_FOREACH (ue_context_p_dummy, rrc_nr_ue_tree_s, &(rrc_instance_pP->rrc_ue_head)) { num_contexts_in_tree++; }
+  // LOG_I(NR_RRC, "\033[1;96m[JEGOR_DEBUG] Active RRC UE contexts in the Red Black tree: %" PRIu16 "\033[0m\n", num_contexts_in_tree);
+  // AssertFatal(rrc_instance_pP->num_active_rrc_ue_contexts == num_contexts_in_tree,
+  //   "Error: num_active_rrc_ue_contexts (%" PRIu32 ") does not match the count in the RB tree (%" PRIu32 ")\n",
+  //   rrc_instance_pP->num_active_rrc_ue_contexts, num_contexts_in_tree);
   return ue_context_p;
 }

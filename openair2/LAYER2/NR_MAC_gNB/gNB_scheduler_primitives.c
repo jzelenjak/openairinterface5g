@@ -3804,7 +3804,7 @@ bool prepare_initial_ul_rrc_message(gNB_MAC_INST *mac, NR_UE_info_t *UE)
       // if the UE list is full, we should reject the UE with an RRC reject message
       // to signal the upper layers to send a reject we send an empty CellGroup information element
       UE->CellGroup = NULL;
-      LOG_W(NR_MAC, "Maximum number of UE alllowed at DU reached. Cannot serve UE %04x", UE->rnti);
+      LOG_W(NR_MAC, "Maximum number of UEs allowed at DU reached. Cannot serve UE %04x\n", UE->rnti);
       return true;
     }
   }

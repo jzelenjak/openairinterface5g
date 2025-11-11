@@ -1,0 +1,78 @@
+# Dockerfile that creates the image for OAI NR UE.
+# NB! Make sure to first build OAI (and dependencies) using Dockerfile.build.
+# For the original Dockerfiles, see the official OpenAirInterface (OAI) repository at
+#   https://gitlab.eurecom.fr/oai/openairinterface5g/
+
+
+FROM oai-builder AS nr-ue-build
+
+# Start from scratch for the target OAI executable (NR UE)
+FROM ubuntu:noble AS oai-nr-ue
+ARG BUILD_OPTION
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Europe/Paris
+
+# Install runtime packages
+RUN apt-get update && \
+    apt-get upgrade --yes && \
+    apt-get install --yes software-properties-common procps libsctp1 libboost-chrono1.83.0 libboost-date-time1.83.0 libboost-filesystem1.83.0 \
+        libboost-regex1.83.0 libboost-serialization1.83.0 libboost-thread1.83.0 libboost-system1.83.0 libboost-program-options1.83.0 \
+        tzdata liblapacke libblas3 libconfig9 openssl net-tools iperf iperf3 iproute2 iputils-ping gdb python3 python3-six python3-requests \
+        libusb-1.0-0 libyaml-cpp-dev vim less && \
+# if the --sanitize option was used to build, additional packages are required
+    /bin/bash -c 'if [[ "$BUILD_OPTION" = "--sanitize" ]]; then DEBIAN_FRONTEND=noninteractive apt-get install --yes \
+        libasan8 \
+        libubsan1; fi' && \
+    apt-get clean -y && \
+    rm -rf /var/lib/apt/lists/*;
+
+# Copy the target executable (NR UE)
+# If you want to use the entrypoint script, you can copy it as follows:
+#   COPY ./docker/scripts/nr_ue_entrypoint.sh ./entrypoint.sh
+# Make sure to have nr-ue.conf file in /opt/oai-nr-ue/etc directory (otherwise, the entrypoint script will fail)
+WORKDIR /opt/oai-nr-ue/bin
+COPY --from=nr-ue-build /oai-ran/cmake_targets/ran_build/build/nr-uesoftmodem ./
+
+# Copy configuration files for NR UE (not needed if it is started with the command-line parameters and the default values for the rest)
+WORKDIR /opt/oai-nr-ue/etc
+COPY ./targets/PROJECTS/GENERIC-NR-5GC/CONF/ue.conf \
+     ./targets/PROJECTS/GENERIC-NR-5GC/CONF/ue.nr.prs.fr1.106prb.conf ./
+
+# Copy dynamic libraries
+COPY --from=nr-ue-build \
+    /oai-ran/cmake_targets/ran_build/build/liboai_eth_transpro.so \
+    /oai-ran/cmake_targets/ran_build/build/librfsimulator.so \
+    /oai-ran/cmake_targets/ran_build/build/liboai_usrpdevif.so \
+    /oai-ran/cmake_targets/ran_build/build/libcoding.so \
+    /oai-ran/cmake_targets/ran_build/build/libparams_libconfig.so \
+    /oai-ran/cmake_targets/ran_build/build/libdfts.so \
+    /oai-ran/cmake_targets/ran_build/build/libldpc*.so \
+    /oai-ran/cmake_targets/ran_build/build/libparams_yaml.so \
+    /oai-ran/cmake_targets/ran_build/build/libvrtsim.so \
+    /usr/local/lib/
+
+# Copy UHD files
+COPY --from=nr-ue-build /usr/local/bin/uhd_find_devices /usr/local/bin
+COPY --from=nr-ue-build /usr/local/lib/libuhd.so.4.8.0 /usr/local/lib
+COPY --from=nr-ue-build /usr/local/lib/uhd/utils/uhd_images_downloader.py /opt/oai-nr-ue/bin
+
+RUN /bin/bash -c "ln -s /usr/local/lib/liboai_usrpdevif.so /usr/local/lib/liboai_device.so" && \
+    ldconfig && \
+    echo "---- ldd on nr-uesoftmodem ----" && \
+    ldd /opt/oai-nr-ue/bin/nr-uesoftmodem && \
+    echo "---- ldd on shared libraries ----" && \
+    ldd /usr/local/lib/liboai_eth_transpro.so \
+        /usr/local/lib/librfsimulator.so \
+        /usr/local/lib/liboai_usrpdevif.so \
+        /usr/local/lib/libcoding.so \
+        /usr/local/lib/libparams_libconfig.so \
+        /usr/local/lib/libdfts.so \
+        /usr/local/lib/libldpc*.so \
+        /usr/local/lib/libuhd.so.4.8.0
+
+WORKDIR /opt/oai-nr-ue
+
+# If you want to use the entrypoint script (see the comment above), use:
+#   ENTRYPOINT ["/opt/oai-nr-ue/bin/entrypoint.sh"]
+ENTRYPOINT ["/opt/oai-nr-ue/bin/nr-uesoftmodem"]
+CMD ["--help"]

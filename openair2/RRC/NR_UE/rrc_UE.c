@@ -134,6 +134,22 @@ static const char nr_nas_attach_req_imsi_dummy_NSA_case[] = {
     0x11,
 };
 
+// YYYY-MM-DD HH:MM:SS
+#define LOG_TIME_FORMAT "%04d-%02d-%02d %02d:%02d:%02d"
+// Number of characters in the timestamp (after formating)
+#define LOG_TIME_FORMAT_SIZE 19
+// Function pointer to gmtime_r or localtime_r functions
+typedef struct tm *(*time_func_r)(const time_t *restrict timep, struct tm *restrict result);
+// Helper function to get the current time (UTC or local time)
+void current_time_nr_ue(char *time_buffer, const uint8_t buffer_size, const time_func_r tf)
+{
+  const time_t raw_time = time(NULL);
+  struct tm tm;
+  tf(&raw_time, &tm);
+  snprintf(time_buffer, buffer_size, LOG_TIME_FORMAT,
+    tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+}
+
 /**
  * @brief Sends an RRC message to the connected UE MAC instance.
  *
@@ -1523,6 +1539,7 @@ static void nr_rrc_prepare_msg3_payload(NR_UE_RRC_INST_t *rrc)
     case RRC_CONNECTION_SETUP:
       // preparing RRC setup request payload in advance
       nr_rrc_ue_prepare_RRCSetupRequest(rrc);
+      LOG_I(NR_RRC, "\033[1;96m[JEGOR_DEBUG] Generated RRCSetupRequest\033[0m\n");
       break;
     case RRC_CONNECTION_REESTABLISHMENT:
       // preparing MSG3 for re-establishment in advance
@@ -1853,6 +1870,36 @@ static void nr_rrc_rrcsetup_fallback(NR_UE_RRC_INST_t *rrc)
   // TODO not implemented yet
 }
 
+/*
+ * A helper function to drop the RRC connection and perform the RA procedure again
+ */
+static void nr_rrc_drop_connection(NR_UE_RRC_INST_t *rrc)
+{
+  // Release the signaling bearers (SRBs)
+  for (int i = 1; i < NR_NUM_SRB; i++) {
+    if (rrc->Srb[i] != RB_NOT_PRESENT) {
+      rrc->Srb[i] = RB_NOT_PRESENT;
+      nr_pdcp_release_srb(rrc->ue_id, i);
+    }
+  }
+  // Release the RLC entities
+  for (int i = 0; i < NR_MAX_NUM_LCID; i++) {
+    if (rrc->active_RLC_entity[i]) {
+      rrc->active_RLC_entity[i] = false;
+      nr_rlc_release_entity(rrc->ue_id, i);
+    }
+  }
+  // Tell the MAC layer to restart the RA procedure
+  // (Specifically, reset the MAC instance and the RA state)
+  nr_mac_rrc_message_t rrc_msg = {0};
+  rrc_msg.payload_type = NR_MAC_RRC_CONFIG_RESET;
+  rrc_msg.payload.config_reset.cause = DROP_RRC_RESTART_RA;
+  rrc->ra_trigger = RRC_CONNECTION_SETUP;
+  nr_rrc_send_msg_to_mac(rrc, &rrc_msg);
+  rrc->nrRrcState = RRC_STATE_IDLE_NR;
+  rrc->rnti = 0;
+}
+
 static void nr_rrc_process_rrcsetup(NR_UE_RRC_INST_t *rrc, const NR_RRCSetup_t *rrcSetup)
 {
   // if the RRCSetup is received in response to an RRCReestablishmentRequest
@@ -1884,6 +1931,7 @@ static void nr_rrc_process_rrcsetup(NR_UE_RRC_INST_t *rrc, const NR_RRCSetup_t *
   // if the RRCSetup is received in response to an RRCResumeRequest, RRCResumeRequest1 or RRCSetupRequest
   // enter RRC_CONNECTED
   rrc->nrRrcState = RRC_STATE_CONNECTED_NR;
+  LOG_I(NR_RRC, "\033[1;96m[JEGOR_DEBUG] Transitioned to RRC_CONNECTED state\033[0m\n");
 
   // Indicate to NAS that the RRC connection has been established (5.3.1.3 of 3GPP TS 24.501)
   MessageDef *msg_p = itti_alloc_new_message(TASK_RRC_NRUE, 0, NR_NAS_CONN_ESTABLISH_IND);
@@ -1904,6 +1952,10 @@ static void nr_rrc_process_rrcreject(NR_UE_RRC_INST_t *rrc, const NR_RRCReject_t
   nr_timer_stop(&timers->T300);
   nr_timer_stop(&timers->T302);
   nr_timer_stop(&timers->T319);
+
+  // Passing NULL means that we want to ignore the RRCReject (and the wait timer)
+  if (!rrcReject)
+    return;
 
   // reset MAC and release the default MAC Cell Group configuration
   NR_UE_MAC_reset_cause_t cause = REJECT;
@@ -1964,7 +2016,17 @@ static int8_t nr_rrc_ue_decode_ccch(NR_UE_RRC_INST_t *rrc, const NRRrcMacCcchDat
 
        case NR_DL_CCCH_MessageType__c1_PR_rrcReject:
          LOG_W(NR_RRC, "[UE%ld] Logical Channel DL-CCCH (SRB0), Received RRCReject \n", rrc->ue_id);
-         nr_rrc_process_rrcreject(rrc, dl_ccch_msg->message.choice.c1->choice.rrcReject);
+         // Ignore the RRCReject message with the wait timer
+         // Drop the RRC connection and perform the RA procedure again
+         // (Technically, no RRC connection has been established, but we reuse the function to avoid UE barred state)
+         rrc->num_restarts++;
+         char time_str[LOG_TIME_FORMAT_SIZE + 1];
+         current_time_nr_ue(time_str, sizeof(time_str), gmtime_r);
+         LOG_I(NR_RRC, "\033[1;95m[JEGOR] [%s] Received RRCReject -- ignore and restart RA (iteration: %" PRIu32 ", " \
+           "established RRC connections: %" PRIu32 ")\033[0m\n", time_str, rrc->num_restarts, rrc->established_rrc_connections);
+         // nr_rrc_process_rrcreject(rrc, dl_ccch_msg->message.choice.c1->choice.rrcReject);
+         nr_rrc_process_rrcreject(rrc, NULL);
+         nr_rrc_drop_connection(rrc);
          rval = 0;
          break;
 
@@ -1972,6 +2034,9 @@ static int8_t nr_rrc_ue_decode_ccch(NR_UE_RRC_INST_t *rrc, const NRRrcMacCcchDat
          LOG_I(NR_RRC, "[UE%ld][RAPROC] Logical Channel DL-CCCH (SRB0), Received NR_RRCSetup\n", rrc->ue_id);
          nr_rrc_process_rrcsetup(rrc, dl_ccch_msg->message.choice.c1->choice.rrcSetup);
          rval = 0;
+         rrc->established_rrc_connections++;
+         LOG_I(NR_RRC, "\033[1;96m[JEGOR_DEBUG] Done processing RRCSetup (established RRC connections: %" PRIu32 ")\033[0m\n",
+           rrc->established_rrc_connections);
          break;
 
        default:
@@ -2369,13 +2434,22 @@ static int nr_rrc_ue_decode_dcch(NR_UE_RRC_INST_t *rrc,
             /* This message hold a dedicated info NAS payload, forward it to NAS */
             NR_DedicatedNAS_Message_t *dedicatedNAS_Message = dlInfo_IE->dedicatedNAS_Message;
             if (dedicatedNAS_Message) {
-              MessageDef *ittiMsg = itti_alloc_new_message(TASK_RRC_NRUE, rrc->ue_id, NAS_DOWNLINK_DATA_IND);
-              dl_info_transfer_ind_t *msg = &NAS_DOWNLINK_DATA_IND(ittiMsg);
-              msg->UEid = rrc->ue_id;
-              msg->nasMsg.length = dedicatedNAS_Message->size;
-              msg->nasMsg.nas_data = malloc(msg->nasMsg.length);
-              memcpy(msg->nasMsg.nas_data, dedicatedNAS_Message->buf, msg->nasMsg.length);
-              itti_send_msg_to_task(TASK_NAS_NRUE, rrc->ue_id, ittiMsg);
+              // The first DL Information Transfer message has been received
+              // This is either (NAS) Authentication Request or (NAS) Registration Reject
+              // Drop the RRC connection and perform the RA procedure again
+              rrc->num_restarts++;
+              char time_str[LOG_TIME_FORMAT_SIZE + 1];
+              current_time_nr_ue(time_str, sizeof(time_str), gmtime_r);
+              LOG_I(NR_RRC, "\033[1;95m[JEGOR] [%s] Received DLInformationTransfer -- ignore and restart RA (iteration: %" PRIu32 ", " \
+                "established RRC connections: %" PRIu32 ")\033[0m\n", time_str, rrc->num_restarts, rrc->established_rrc_connections);
+              nr_rrc_drop_connection(rrc);
+              /// MessageDef *ittiMsg = itti_alloc_new_message(TASK_RRC_NRUE, rrc->ue_id, NAS_DOWNLINK_DATA_IND);
+              // dl_info_transfer_ind_t *msg = &NAS_DOWNLINK_DATA_IND(ittiMsg);
+              // msg->UEid = rrc->ue_id;
+              // msg->nasMsg.length = dedicatedNAS_Message->size;
+              // msg->nasMsg.nas_data = malloc(msg->nasMsg.length);
+              // memcpy(msg->nasMsg.nas_data, dedicatedNAS_Message->buf, msg->nasMsg.length);
+              // itti_send_msg_to_task(TASK_NAS_NRUE, rrc->ue_id, ittiMsg);
             }
           }
         } break;
